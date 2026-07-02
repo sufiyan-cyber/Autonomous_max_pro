@@ -64,15 +64,25 @@ async def new_game() -> dict:
         _state = json.loads(json.dumps(DEFAULT_STATE))
         _state["started"] = True
 
-        seeds = []
-        for npc_id, npc in NPCS.items():
+        # One combined dossier per NPC, all five seeded in parallel —
+        # cloud remember() runs a full cognify pipeline (~15s each).
+        async def seed(npc_id: str, npc: dict):
             ds = npc_dataset(npc_id)
             rel = "; ".join(f"{NPCS[k]['name']}: {v}" for k, v in RELATIONSHIPS[npc_id].items())
-            seeds.append((f"{TOWN_RECORD}", ds))
-            seeds.append((f"My private knowledge and memories: {npc['dossier']}", ds))
-            seeds.append((f"My opinions of the others: {rel}", ds))
-        for text, ds in seeds:
+            text = (
+                f"PUBLIC RECORD KNOWN TO ALL: {TOWN_RECORD}\n\n"
+                f"MY PRIVATE KNOWLEDGE AND MEMORIES: {npc['dossier']}\n\n"
+                f"MY OPINIONS OF THE OTHERS: {rel}"
+            )
             data_id = await backend.remember(text, dataset=ds, salience="core", day=0)
+            return ds, data_id
+
+        results = await asyncio.gather(*(seed(nid, npc) for nid, npc in NPCS.items()),
+                                       return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                raise r
+            ds, data_id = r
             if data_id:
                 _state["memory_ids"].append({"id": data_id, "dataset": ds, "day": 0, "salience": "core"})
         save_state()
@@ -139,8 +149,12 @@ async def interrogate(npc_id: str, line: str) -> dict:
             f"I replied: \"{turn.dialogue}\". "
             + (f"(Privately: {turn.inner_note})" if turn.inner_note else "")
         )
+        # Background: don't block the reply on the cloud cognify pipeline.
+        # Within-session consistency comes from the chat history we pass to
+        # the LLM; cross-session recall only needs prior turns, which will
+        # have finished processing by then.
         data_id = await backend.remember(exchange, dataset=ds, session_id=session_id,
-                                         salience="high", day=day)
+                                         salience="high", day=day, background=True)
         if data_id:
             s["memory_ids"].append({"id": data_id, "dataset": ds, "day": day, "salience": "high"})
 
@@ -211,12 +225,18 @@ async def end_day() -> dict:
         except Exception:
             pass
         spread = []
-        for g in gossip_items:
-            if g.to_npc not in NPCS:
-                continue
-            data_id = await backend.remember(
+        valid_gossip = [g for g in gossip_items if g.to_npc in NPCS]
+
+        async def spread_one(g):
+            return g, await backend.remember(
                 f"Day {day}, rumor I heard: {g.rumor}",
                 dataset=npc_dataset(g.to_npc), salience=g.salience, day=day)
+
+        for res in await asyncio.gather(*(spread_one(g) for g in valid_gossip),
+                                        return_exceptions=True):
+            if isinstance(res, Exception):
+                continue
+            g, data_id = res
             if data_id:
                 s["memory_ids"].append({"id": data_id, "dataset": npc_dataset(g.to_npc),
                                         "day": day, "salience": g.salience})

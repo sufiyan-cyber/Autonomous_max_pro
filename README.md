@@ -50,7 +50,7 @@ The AI never loses context. That's not a feature of this game. It *is* the game.
 │  (force graph) │◀────│  gossip, decay    │◀────│  remember/recall/         │
 └────────────────┘     │        │          │     │  improve/forget           │
                        │        ▼          │     └───────────────────────────┘
-                       │  Claude (Opus 4.8)│
+                       │  Groq (Llama 3.3) │
                        │  NPC dialogue +   │
                        │  structured claims│
                        └──────────────────┘
@@ -98,7 +98,8 @@ npm run dev                 # → http://localhost:3000
 MEMORY_BACKEND=cloud                     # cloud | local | mock
 COGNEE_CLOUD_URL=https://<tenant>.aws.cognee.ai
 COGNEE_CLOUD_API_KEY=...                 # platform.cognee.ai → API Keys
-ANTHROPIC_API_KEY=...                    # NPC dialogue
+GROQ_API_KEY=...                         # NPC dialogue (Llama 3.3 70B)
+ALIBI_MODEL=llama-3.3-70b-versatile
 ```
 
 - `cloud` — Cognee Cloud (the hackathon track this targets)
@@ -107,8 +108,8 @@ ANTHROPIC_API_KEY=...                    # NPC dialogue
 
 ## Stack
 
-Next.js · FastAPI · **Cognee Cloud** (memory: vector + graph) · Claude Opus 4.8
-(dialogue) · react-force-graph (corkboard)
+Next.js · FastAPI · **Cognee Cloud** (memory: vector + graph) · Groq / Llama 3.3
+70B (dialogue) · react-force-graph (corkboard)
 
 No bolted-on vector DB. No separate graph DB. Cognee *is* the memory.
 

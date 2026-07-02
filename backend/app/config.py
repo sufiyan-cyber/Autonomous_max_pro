@@ -12,8 +12,8 @@ MEMORY_BACKEND = os.getenv("MEMORY_BACKEND", "mock").lower()
 COGNEE_CLOUD_URL = os.getenv("COGNEE_CLOUD_URL", "")
 COGNEE_CLOUD_API_KEY = os.getenv("COGNEE_CLOUD_API_KEY", "")
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ALIBI_MODEL = os.getenv("ALIBI_MODEL", "claude-opus-4-8")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+ALIBI_MODEL = os.getenv("ALIBI_MODEL", "llama-3.3-70b-versatile")
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR.mkdir(exist_ok=True)

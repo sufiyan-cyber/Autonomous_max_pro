@@ -150,4 +150,4 @@ No bolted-on vector DB. No separate graph DB. Cognee *is* the memory.
 
 ---
 
-*Built in three days for the WeMakeDevs × Cognee hackathon, June–July 2026.*
+*Built  for the WeMakeDevs × Cognee hackathon*

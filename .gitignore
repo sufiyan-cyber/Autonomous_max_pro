@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+node_modules/
+.next/
+backend/data/*.json
+.cognee/
+.venv/
+venv/
+*.log
+.DS_Store

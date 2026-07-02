@@ -30,6 +30,12 @@ export default function Game() {
     setBusy(false);
   }
 
+  function startOver() {
+    if (window.confirm("Start over? The town forgets everything — all five memories are wiped and reseeded.")) {
+      startGame();
+    }
+  }
+
   async function pickSuspect(id) {
     setActive(id);
     const s = await api.session(id).catch(() => ({ turns: [] }));
@@ -153,6 +159,9 @@ export default function Game() {
           <span>DAY <b>{state.day}</b>/{state.days_total}</span>
           <span>QUESTIONS <b>{state.actions_left}</b></span>
           <span>THREADS <b>{state.threads_found.length}</b>/{state.threads_total}</span>
+          <button className="btn small" onClick={startOver} disabled={busy} title="Wipe all memories and start a fresh case">
+            START OVER
+          </button>
         </div>
       </div>
 

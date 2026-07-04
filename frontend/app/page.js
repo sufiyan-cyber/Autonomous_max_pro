@@ -21,11 +21,45 @@ export default function Game() {
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [chat]);
 
+  // If the page loads (or reloads) while the server is mid-seeding or
+  // mid-nightfall, resume watching for the phase to finish.
+  useEffect(() => {
+    if (!state?.busy_phase || busy) return;
+    let cancelled = false;
+    (async () => {
+      setBusy(true);
+      try {
+        const s = await pollUntilReady();
+        if (cancelled) return;
+        if (s.busy_error) setError(s.busy_error);
+        setState(s);
+        if (s.last_night && state.busy_phase === "nightfall") setNight(s.last_night);
+      } catch { /* transient network error; next action refreshes */ }
+      if (!cancelled) setBusy(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.busy_phase]);
+
+  // Seeding/nightfall run as background jobs on the server (cloud memory
+  // pipelines outlive proxy timeouts) — poll until the phase clears.
+  async function pollUntilReady() {
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2500));
+      const s = await api.state();
+      if (!s.busy_phase) return s;
+      setState(s);
+    }
+  }
+
   async function startGame() {
     setBusy(true); setError("");
     try {
       setState(await api.newGame());
       setActive(null); setChat([]); setNight(null); setAccusing(false);
+      const s = await pollUntilReady();
+      if (s.busy_error) setError(s.busy_error);
+      setState(s);
     } catch (e) { setError(String(e.message || e)); }
     setBusy(false);
   }
@@ -71,10 +105,12 @@ export default function Game() {
   async function endDay() {
     setBusy(true); setError("");
     try {
-      const r = await api.endDay();
-      setNight(r);
+      setState(await api.endDay());
       setActive(null); setChat([]);
-      refresh();
+      const s = await pollUntilReady();
+      if (s.busy_error) setError(s.busy_error);
+      setState(s);
+      if (s.last_night) setNight(s.last_night);
     } catch (e) { setError(String(e.message || e)); }
     setBusy(false);
   }
@@ -108,6 +144,22 @@ export default function Game() {
     );
   }
 
+  // ----- seeding in progress (server-side memory work) -----
+  if (state.busy_phase === "seeding") {
+    return (
+      <div className="overlay">
+        <h2 className="serif">GRAYHARBOR AWAKENS</h2>
+        <div className="body">
+          {"Five suspects. Five separate minds.\n\n"}
+          {"Each dossier is being turned into a living knowledge graph on\n"}
+          {"Cognee Cloud — everything they know, saw, and are hiding.\n\n"}
+          {"This takes about a minute. It only happens when a new case opens."}
+        </div>
+        <span className="spinner typewriter" style={{ marginTop: 26 }}>seeding five minds…</span>
+      </div>
+    );
+  }
+
   // ----- title screen -----
   if (!state.started) {
     return (
@@ -120,6 +172,19 @@ export default function Game() {
         </button>
         {error && <p style={{ color: "var(--red)", marginTop: 14, fontSize: 12 }}>{error}</p>}
         <div className="powered">EVERY SUSPECT HAS A REAL MEMORY · POWERED BY COGNEE</div>
+      </div>
+    );
+  }
+
+  // ----- nightfall in progress (server-side memory work) -----
+  if (state.busy_phase === "nightfall" && !night) {
+    return (
+      <div className="overlay">
+        <h2 className="serif">NIGHT FALLS</h2>
+        <div className="body">
+          {"Lamps go out along the waterfront.\nMemories settle. Rumors travel.\n\n"}
+        </div>
+        <span className="spinner typewriter">the town talks in its sleep…</span>
       </div>
     );
   }

@@ -17,6 +17,9 @@ DEFAULT_STATE = {
     "actions_left": CASE["actions_per_day"],
     "game_over": False,
     "ending": None,
+    "busy_phase": None,              # None | "seeding" | "nightfall"
+    "busy_error": None,
+    "last_night": None,              # result of the most recent end_day
     "trust": {npc: 0 for npc in NPCS},
     "revealed_secrets": [],          # ["sal:blackmail_payments", ...]
     "threads_found": [],             # subset of CASE.evidence_threads keys
@@ -55,44 +58,65 @@ SECRET_TO_THREAD = {
 }
 
 
-async def new_game() -> dict:
-    """Reset the world: forget() everything, then remember() each NPC's dossier."""
+async def _do_new_game():
+    """Background job: forget() everything, then remember() each NPC's dossier."""
     global _state
     async with _lock:
-        await backend.setup()
-        await backend.wipe()
+        try:
+            await backend.setup()
+            await backend.wipe()
+
+            # One combined dossier per NPC, all five seeded in parallel —
+            # cloud remember() runs a full cognify pipeline (~15s each).
+            async def seed(npc_id: str, npc: dict):
+                ds = npc_dataset(npc_id)
+                rel = "; ".join(f"{NPCS[k]['name']}: {v}" for k, v in RELATIONSHIPS[npc_id].items())
+                text = (
+                    f"PUBLIC RECORD KNOWN TO ALL: {TOWN_RECORD}\n\n"
+                    f"MY PRIVATE KNOWLEDGE AND MEMORIES: {npc['dossier']}\n\n"
+                    f"MY OPINIONS OF THE OTHERS: {rel}"
+                )
+                data_id = await backend.remember(text, dataset=ds, salience="core", day=0)
+                return ds, data_id
+
+            results = await asyncio.gather(*(seed(nid, npc) for nid, npc in NPCS.items()),
+                                           return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    raise r
+                ds, data_id = r
+                if data_id:
+                    _state["memory_ids"].append({"id": data_id, "dataset": ds, "day": 0, "salience": "core"})
+            _state["started"] = True
+        except Exception as e:
+            _state["busy_error"] = f"Seeding failed: {e}"
+        finally:
+            _state["busy_phase"] = None
+            save_state()
+
+
+async def new_game() -> dict:
+    """Kick off world seeding in the background; the client polls /api/state.
+    Long remember() pipelines would otherwise outlive proxy timeouts on
+    hosted deployments."""
+    global _state
+    async with _lock:
+        if _state and _state.get("busy_phase"):
+            return public_state()
         _state = json.loads(json.dumps(DEFAULT_STATE))
-        _state["started"] = True
-
-        # One combined dossier per NPC, all five seeded in parallel —
-        # cloud remember() runs a full cognify pipeline (~15s each).
-        async def seed(npc_id: str, npc: dict):
-            ds = npc_dataset(npc_id)
-            rel = "; ".join(f"{NPCS[k]['name']}: {v}" for k, v in RELATIONSHIPS[npc_id].items())
-            text = (
-                f"PUBLIC RECORD KNOWN TO ALL: {TOWN_RECORD}\n\n"
-                f"MY PRIVATE KNOWLEDGE AND MEMORIES: {npc['dossier']}\n\n"
-                f"MY OPINIONS OF THE OTHERS: {rel}"
-            )
-            data_id = await backend.remember(text, dataset=ds, salience="core", day=0)
-            return ds, data_id
-
-        results = await asyncio.gather(*(seed(nid, npc) for nid, npc in NPCS.items()),
-                                       return_exceptions=True)
-        for r in results:
-            if isinstance(r, Exception):
-                raise r
-            ds, data_id = r
-            if data_id:
-                _state["memory_ids"].append({"id": data_id, "dataset": ds, "day": 0, "salience": "core"})
+        _state["busy_phase"] = "seeding"
         save_state()
-        return public_state()
+    asyncio.create_task(_do_new_game())
+    return public_state()
 
 
 def public_state() -> dict:
     s = load_state()
     return {
         "started": s["started"],
+        "busy_phase": s.get("busy_phase"),
+        "busy_error": s.get("busy_error"),
+        "last_night": s.get("last_night"),
         "day": s["day"],
         "days_total": CASE["days"],
         "actions_left": s["actions_left"],
@@ -121,6 +145,8 @@ async def interrogate(npc_id: str, line: str) -> dict:
     s = load_state()
     if not s["started"] or s["game_over"]:
         raise ValueError("No active game.")
+    if s.get("busy_phase"):
+        raise ValueError("The town is not ready — wait for the night to pass.")
     if s["actions_left"] <= 0:
         raise ValueError("No questions left today. End the day.")
     if npc_id not in NPCS:
@@ -200,13 +226,27 @@ async def interrogate(npc_id: str, line: str) -> dict:
 
 
 async def end_day() -> dict:
-    """Night falls: improve() bridges sessions into graphs, gossip spreads
-    via remember(), and old low-salience memories decay via forget()."""
+    """Kick off nightfall in the background; the client polls /api/state and
+    reads last_night when the phase clears."""
     s = load_state()
     if not s["started"] or s["game_over"]:
         raise ValueError("No active game.")
+    if s.get("busy_phase"):
+        return public_state()
+    s["busy_phase"] = "nightfall"
+    s["last_night"] = None
+    save_state()
+    asyncio.create_task(_do_end_day())
+    return public_state()
+
+
+async def _do_end_day():
+    """Night falls: improve() bridges sessions into graphs, gossip spreads
+    via remember(), and old low-salience memories decay via forget()."""
+    s = load_state()
 
     async with _lock:
+      try:
         day = s["day"]
 
         # 1. improve(): fold the day's session memory into each NPC's graph.
@@ -278,9 +318,13 @@ async def end_day() -> dict:
                     "and paid nothing raises his glass to the fog."
                 ),
             }
+        s["last_night"] = {"day": s["day"], "gossip": spread, "memories_faded": forgotten,
+                           "game_over": s["game_over"], "ending": s["ending"]}
+      except Exception as e:
+        s["busy_error"] = f"Nightfall failed: {e}"
+      finally:
+        s["busy_phase"] = None
         save_state()
-        return {"day": s["day"], "gossip": spread, "memories_faded": forgotten,
-                "game_over": s["game_over"], "ending": s["ending"]}
 
 
 async def accuse(npc_id: str) -> dict:
